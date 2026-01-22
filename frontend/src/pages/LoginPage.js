@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { LogIn, Mail, Lock } from 'lucide-react';
+import { theme } from '../config/theme';
+import Button from '../components/Button';
+import Card from '../components/Card';
 
 const LoginPage = () => {
   const [email, setEmail] = useState('');
@@ -27,57 +31,163 @@ const LoginPage = () => {
     }
   };
 
+  const styles = {
+    container: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: '100vh',
+      backgroundColor: theme.colors.lightBg,
+      padding: '2rem',
+    },
+    formCard: {
+      width: '100%',
+      maxWidth: '450px',
+    },
+    header: {
+      textAlign: 'center',
+      marginBottom: '2rem',
+    },
+    title: {
+      fontSize: theme.typography.fontSize['3xl'],
+      fontWeight: theme.typography.fontWeight.bold,
+      color: theme.colors.primary,
+      marginBottom: '0.5rem',
+    },
+    subtitle: {
+      fontSize: theme.typography.fontSize.sm,
+      color: theme.colors.textSecondary,
+    },
+    form: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '1.5rem',
+    },
+    inputGroup: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '0.5rem',
+    },
+    label: {
+      fontSize: theme.typography.fontSize.sm,
+      fontWeight: theme.typography.fontWeight.medium,
+      color: theme.colors.textPrimary,
+    },
+    inputWrapper: {
+      position: 'relative',
+      display: 'flex',
+      alignItems: 'center',
+    },
+    icon: {
+      position: 'absolute',
+      left: '1rem',
+      color: theme.colors.textSecondary,
+    },
+    input: {
+      width: '100%',
+      padding: '0.75rem 1rem 0.75rem 3rem',
+      fontSize: theme.typography.fontSize.base,
+      border: `1px solid ${theme.colors.border}`,
+      borderRadius: theme.borderRadius.md,
+      backgroundColor: theme.colors.cardBg,
+      color: theme.colors.textPrimary,
+      transition: 'all 0.2s ease',
+    },
+    error: {
+      padding: '0.75rem',
+      backgroundColor: `${theme.colors.danger}15`,
+      border: `1px solid ${theme.colors.danger}`,
+      borderRadius: theme.borderRadius.md,
+      fontSize: theme.typography.fontSize.sm,
+      color: theme.colors.danger,
+      textAlign: 'center',
+    },
+    footer: {
+      marginTop: '1.5rem',
+      textAlign: 'center',
+      fontSize: theme.typography.fontSize.sm,
+      color: theme.colors.textSecondary,
+    },
+    link: {
+      color: theme.colors.secondary,
+      fontWeight: theme.typography.fontWeight.medium,
+      textDecoration: 'none',
+    },
+  };
+
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100">
-      <div className="w-full max-w-md p-8 space-y-6 bg-white rounded-lg shadow-md">
-        <h2 className="text-2xl font-bold text-center text-gray-900">Login to SafeTread</h2>
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
-            <label htmlFor="email" className="text-sm font-medium text-gray-700">
-              Email address
-            </label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            />
+    <div style={styles.container}>
+      <div style={styles.formCard}>
+        <Card>
+          <div style={styles.header}>
+            <h2 style={styles.title}>Welcome Back</h2>
+            <p style={styles.subtitle}>Sign in to access your SafeTread dashboard</p>
           </div>
-          <div>
-            <label htmlFor="password" cclassName="text-sm font-medium text-gray-700">
-              Password
-            </label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            />
-          </div>
-          {error && <p className="text-sm text-center text-red-600">{error}</p>}
-          <div>
-            <button
-              type="submit"
-              className="w-full px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+
+          <form onSubmit={handleSubmit} style={styles.form}>
+            <div style={styles.inputGroup}>
+              <label htmlFor="email" style={styles.label}>
+                Email Address
+              </label>
+              <div style={styles.inputWrapper}>
+                <Mail size={18} style={styles.icon} />
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  style={styles.input}
+                  onFocus={(e) => e.target.style.borderColor = theme.colors.secondary}
+                  onBlur={(e) => e.target.style.borderColor = theme.colors.border}
+                />
+              </div>
+            </div>
+
+            <div style={styles.inputGroup}>
+              <label htmlFor="password" style={styles.label}>
+                Password
+              </label>
+              <div style={styles.inputWrapper}>
+                <Lock size={18} style={styles.icon} />
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter your password"
+                  style={styles.input}
+                  onFocus={(e) => e.target.style.borderColor = theme.colors.secondary}
+                  onBlur={(e) => e.target.style.borderColor = theme.colors.border}
+                />
+              </div>
+            </div>
+
+            {error && <div style={styles.error}>{error}</div>}
+
+            <Button 
+              type="submit" 
+              fullWidth 
+              size="lg"
+              icon={<LogIn size={20} />}
             >
-              Sign in
-            </button>
+              Sign In
+            </Button>
+          </form>
+
+          <div style={styles.footer}>
+            Don't have an account?{' '}
+            <Link to="/register" style={styles.link}>
+              Create one now
+            </Link>
           </div>
-        </form>
-        <p className="text-sm text-center text-gray-600">
-          Not a member?{' '}
-          <Link to="/register" className="font-medium text-indigo-600 hover:text-indigo-500">
-            Sign up
-          </Link>
-        </p>
+        </Card>
       </div>
     </div>
   );

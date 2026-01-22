@@ -1,34 +1,20 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Global base styles */
+* {
+  box-sizing: border-box;
+}
 
-@layer utilities {
-    .fade-in {
-      animation: fadeIn 0.5s ease-in-out;
-    }
-  
-    .slide-in-from-bottom {
-      animation: slideInFromBottom 0.5s ease-in-out;
-    }
-  
-    @keyframes fadeIn {
-      from {
-        opacity: 0;
-      }
-      to {
-        opacity: 1;
-      }
-    }
-  
-    @keyframes slideInFromBottom {
-      from {
-        transform: translateY(20px);
-        opacity: 0;
-      }
-      to {
-        transform: translateY(0);
-        opacity: 1;
-      }
-    }
-  }
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #f6f8fb;
+  color: #0a2540;
+}
 
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+}
