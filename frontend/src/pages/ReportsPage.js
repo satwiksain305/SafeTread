@@ -1,24 +1,60 @@
-import React, { useState } from 'react';
-import { Filter, Download, Eye, Calendar } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Filter, Download, Eye, Calendar, RefreshCw } from 'lucide-react';
 import { theme } from '../config/theme';
+import apiClient from '../api/axios';
 import Card from '../components/Card';
 import StatusBadge from '../components/StatusBadge';
 import Button from '../components/Button';
 
 const ReportsPage = () => {
   const [filterStatus, setFilterStatus] = useState('all');
+  const [allScans, setAllScans] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  // Mock data - replace with actual backend data
-  const allScans = [
-    { id: 1, date: '2024-02-05', time: '14:30', wear: 75, status: 'Critical', recommendation: 'Immediate replacement required', image: '/placeholder1.jpg' },
-    { id: 2, date: '2024-02-03', time: '10:15', wear: 58, status: 'Warning', recommendation: 'Schedule replacement soon', image: '/placeholder2.jpg' },
-    { id: 3, date: '2024-01-28', time: '16:45', wear: 52, status: 'Warning', recommendation: 'Monitor closely', image: '/placeholder3.jpg' },
-    { id: 4, date: '2024-01-25', time: '09:20', wear: 38, status: 'Good', recommendation: 'Tyres in good condition', image: '/placeholder4.jpg' },
-    { id: 5, date: '2024-01-20', time: '11:30', wear: 28, status: 'Healthy', recommendation: 'Excellent condition', image: '/placeholder5.jpg' },
-    { id: 6, date: '2024-01-15', time: '13:00', wear: 22, status: 'Healthy', recommendation: 'Excellent condition', image: '/placeholder6.jpg' },
-    { id: 7, date: '2024-01-10', time: '15:45', wear: 15, status: 'Healthy', recommendation: 'New tyre condition', image: '/placeholder7.jpg' },
-    { id: 8, date: '2024-01-05', time: '08:30', wear: 45, status: 'Good', recommendation: 'Good condition overall', image: '/placeholder8.jpg' },
-  ];
+  const fetchScans = async (isBackground = false) => {
+    if (!isBackground) {
+      setLoading(true);
+    }
+    try {
+      const response = await apiClient.get('/tire-history');
+      console.log('Fetched tire history:', response.data);
+      // Transform backend response to match table format
+      const scans = response.data.map((item, index) => {
+        const analyzedDate = new Date(item.analyzed_at);
+        return {
+          id: index + 1,
+          date: analyzedDate.toISOString().split('T')[0],
+          time: analyzedDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+          wear: item.wear_percentage,
+          status: item.status,
+          recommendation: item.recommendation,
+          isMockPrediction: item.model_used === 'Mock',
+          image: '/placeholder.jpg',
+          rawData: item,
+        };
+      });
+      console.log('Transformed scans:', scans);
+      setAllScans(scans);
+    } catch (error) {
+      console.error('Failed to fetch scan history:', error);
+      if (!isBackground) {
+        setAllScans([]);
+      }
+    } finally {
+      if (!isBackground) {
+        setLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    fetchScans();
+    const intervalId = setInterval(() => {
+      fetchScans(true);
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, []);
 
   const filteredScans = filterStatus === 'all' 
     ? allScans 
@@ -118,6 +154,19 @@ const ReportsPage = () => {
       display: 'flex',
       gap: '0.5rem',
     },
+    mockBadge: {
+      display: 'inline-block',
+      backgroundColor: '#fff3cd',
+      color: '#856404',
+      padding: '0.25rem 0.5rem',
+      borderRadius: theme.borderRadius.sm,
+      fontSize: '0.65rem',
+      fontWeight: theme.typography.fontWeight.bold,
+      textTransform: 'uppercase',
+      letterSpacing: '0.05em',
+      border: '1px solid #ffc107',
+      marginLeft: '0.5rem',
+    },
   };
 
   const getStatusCount = (status) => {
@@ -148,6 +197,14 @@ const ReportsPage = () => {
             <option value="warning">Warning</option>
             <option value="critical">Critical</option>
           </select>
+          <Button 
+            variant="secondary" 
+            size="sm"
+            icon={<RefreshCw size={16} />}
+            onClick={fetchScans}
+          >
+            Refresh
+          </Button>
           <Button 
             variant="secondary" 
             size="sm"
@@ -187,7 +244,9 @@ const ReportsPage = () => {
 
       {/* Reports Table */}
       <Card title="Scan History" subtitle={`Showing ${filteredScans.length} records`}>
-        {filteredScans.length > 0 ? (
+        {loading ? (
+          <div style={styles.noData}>Loading scan history...</div>
+        ) : filteredScans.length > 0 ? (
           <div style={{ overflowX: 'auto' }}>
             <table style={styles.table}>
               <thead>
@@ -221,7 +280,10 @@ const ReportsPage = () => {
                       </span>
                     </td>
                     <td style={styles.td}>
-                      <StatusBadge status={scan.status} size="sm" />
+                      <div style={{display: 'flex', alignItems: 'center'}}>
+                        <StatusBadge status={scan.status} size="sm" />
+                        {scan.isMockPrediction && <span style={styles.mockBadge}>MOCK</span>}
+                      </div>
                     </td>
                     <td style={styles.td}>{scan.recommendation}</td>
                     <td style={styles.td}>

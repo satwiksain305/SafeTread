@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
@@ -8,25 +9,28 @@ import datetime
 import bcrypt
 import jwt
 from dotenv import load_dotenv
+from PIL import Image
+import io
+import random
 
-# Load environment variables
+USE_REAL_MODEL = False
+model = None
+print("⚠ Using mock predictions (TensorFlow model conversion pending)")
+
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}})
 
-# --- MongoDB Connection ---
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://safetread_user:Safetread123@safetread.io1oksf.mongodb.net/?appName=SafeTread")
 MONGODB_DB = os.getenv("MONGODB_DB", "SafeTreadDB")
 
 try:
     client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-    # Test connection
     client.admin.command('ping')
     print(f"✓ MongoDB Connected: {MONGODB_DB}")
 except Exception as e:
     print(f"✗ MongoDB Connection Failed: {e}")
-    # Attempt localhost fallback for development
     try:
         client = MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=3000)
         print("⚠ Using local MongoDB fallback")
@@ -36,13 +40,12 @@ except Exception as e:
 db = client[MONGODB_DB]
 users_collection = db["users"]
 
-# --- JWT Secret ---
 JWT_SECRET = os.getenv("JWT_SECRET", "your_super_secret_key")
 JWT_ALGORITHM = "HS256"
-JWT_EXP_DELTA_SECONDS = 3600  # 1 hour
+JWT_EXP_DELTA_SECONDS = 3600
 
-# --- Helper Functions ---
 def serialize_doc(doc):
+    """Convert MongoDB ObjectId to string and format dates"""
     doc["_id"] = str(doc["_id"])
     if "created_at" in doc and doc["created_at"]:
         doc["created_at"] = doc["created_at"].isoformat()
@@ -70,14 +73,12 @@ def token_required(f):
         return f(*args, **kwargs)
     return wraps(f)(decorator)
 
-# --- Routes ---
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"message": "Welcome to SafeTread API 🚗", "status": "running"}), 200
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Health check endpoint"""
     try:
         client.admin.command('ping')
         db_status = "connected"
@@ -143,7 +144,6 @@ def login_user():
     else:
         return jsonify({"message": "Invalid email or password"}), 401
 
-# --- Protected Routes ---
 @app.route("/profile", methods=["GET"])
 @token_required
 def get_profile():
@@ -177,6 +177,104 @@ def upload_tire_data():
     db.tire_data.insert_one(tire_info)
     return jsonify({"message": "✅ Tire data saved successfully!"}), 201
 
+@app.route("/analyze-tire", methods=["POST"])
+def analyze_tire():
+    """Analyze tire image and return wear analysis with mock/real predictions"""
+    user_email = "guest"
+    token = request.headers.get("Authorization")
+    if token and token.startswith("Bearer "):
+        try:
+            payload = jwt.decode(token.split(" ")[1], JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            user_email = payload.get("email", "guest")
+        except Exception:
+            pass
+
+    if 'image' not in request.files:
+        return jsonify({"error": "No image file provided"}), 400
+    
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    try:
+        # Read and preprocess image
+        image_bytes = file.read()
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image = image.resize((224, 224))
+        
+        if USE_REAL_MODEL:
+            # Real ML prediction
+            img_array = np.array(image) / 255.0
+            img_array = np.expand_dims(img_array, axis=0)
+            prediction = model.predict(img_array, verbose=0)
+            
+            # Model outputs [healthy_prob, critical_prob]
+            healthy_prob = float(prediction[0][0])
+            critical_prob = float(prediction[0][1])
+            
+            # Determine status based on probabilities
+            if critical_prob > 0.75:
+                status = "Critical"
+                recommendation = "Immediate replacement required. Tyre safety is compromised."
+                wear_percentage = int(critical_prob * 100)
+            elif critical_prob > 0.50:
+                status = "Warning"
+                recommendation = "Schedule replacement soon. Tread depth is below optimal level."
+                wear_percentage = int(critical_prob * 100)
+            else:
+                status = "Healthy"
+                recommendation = "Tyre is in excellent condition. Continue regular monitoring."
+                wear_percentage = int(critical_prob * 100)
+            
+            confidence = max(healthy_prob, critical_prob) * 100
+            
+        else:
+            # Mock prediction (fallback)
+            wear_percentage = random.randint(10, 90)
+            if wear_percentage >= 75:
+                status = "Critical"
+                recommendation = "Immediate replacement required."
+            elif wear_percentage >= 50:
+                status = "Warning"
+                recommendation = "Schedule replacement soon."
+            else:
+                status = "Healthy"
+                recommendation = "Tyre is in excellent condition."
+            confidence = random.uniform(75, 95)
+        
+        # Save prediction to database
+        prediction_record = {
+            "user_email": user_email,
+            "wear_percentage": wear_percentage,
+            "status": status,
+            "recommendation": recommendation,
+            "confidence": round(confidence, 2),
+            "analyzed_at": datetime.datetime.utcnow(),
+            "model_used": "CNN (TensorFlow)" if USE_REAL_MODEL else "Mock"
+        }
+        db.tire_predictions.insert_one(prediction_record)
+        
+        return jsonify({
+            "message": "Analysis completed successfully",
+            "wear_percentage": wear_percentage,
+            "status": status,
+            "recommendation": recommendation,
+            "confidence": round(confidence, 2),
+            "model_type": "Real ML Model" if USE_REAL_MODEL else "Mock Predictions",
+            "is_mock_prediction": not USE_REAL_MODEL
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": f"Analysis failed: {str(e)}"}), 500
+
+@app.route("/tire-history", methods=["GET"])
+@token_required
+def get_tire_history():
+    """Retrieve user's prediction history from database"""
+    user_email = request.user["email"]
+    predictions = list(db.tire_predictions.find({"user_email": user_email}).sort("analyzed_at", -1).limit(50))
+    return jsonify([serialize_doc(p) for p in predictions]), 200
+
 @app.route("/data", methods=["GET"])
 @token_required
 def get_all_tire_data():
@@ -184,8 +282,5 @@ def get_all_tire_data():
     tire_data = list(db.tire_data.find({"user_email": user_email}))
     return jsonify([serialize_doc(d) for d in tire_data]), 200
 
-# --- Run Server ---
 if __name__ == "__main__":
-    # Use debug=False to avoid Windows auto-reloader socket issues
-    # Set use_reloader=False if you need debug mode
     app.run(host='127.0.0.1', port=5000, debug=False)

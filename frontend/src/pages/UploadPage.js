@@ -1,11 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Camera, FileCheck, AlertCircle, Loader } from 'lucide-react';
+import { Upload, Camera, FileCheck, AlertCircle, Loader, TrendingDown } from 'lucide-react';
 import apiClient from '../api/axios';
 import { theme, getWearColor } from '../config/theme';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import StatusBadge from '../components/StatusBadge';
+import WearSeverityIndicator from '../components/WearSeverityIndicator';
+import ConditionBadge from '../components/ConditionBadge';
+import PredictionHistory from '../components/PredictionHistory';
 
 const UploadPage = () => {
   const [imageFile, setImageFile] = useState(null);
@@ -14,6 +17,8 @@ const UploadPage = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
+  const [predictionHistory, setPredictionHistory] = useState([]);
+  const [isAnimating, setIsAnimating] = useState(false);
   const navigate = useNavigate();
 
   const handleFileChange = (e) => {
@@ -23,7 +28,6 @@ const UploadPage = () => {
       setError('');
       setAnalysisResult(null);
       
-      // Create preview
       const reader = new FileReader();
       reader.onloadend = () => {
         setPreview(reader.result);
@@ -37,10 +41,12 @@ const UploadPage = () => {
     setMessage('');
     setError('');
     setLoading(true);
+    setIsAnimating(true);
 
     if (!imageFile) {
       setError('Please select an image to upload.');
       setLoading(false);
+      setIsAnimating(false);
       return;
     }
 
@@ -48,35 +54,31 @@ const UploadPage = () => {
     formData.append('image', imageFile);
 
     try {
-      const response = await apiClient.post('/upload', formData, {
+      const response = await apiClient.post('/analyze-tire', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
       
-      // Mock analysis result - replace with actual backend response
-      const mockResult = {
-        wearPercentage: Math.floor(Math.random() * 100),
-        status: '',
-        recommendation: '',
+      const result = {
+        wearPercentage: response.data.wear_percentage,
+        status: response.data.status,
+        recommendation: response.data.recommendation,
+        confidence: response.data.confidence,
+        modelType: response.data.model_type,
+        isMockPrediction: response.data.is_mock_prediction,
+        timestamp: new Date().toISOString(),
       };
       
-      if (mockResult.wearPercentage >= 75) {
-        mockResult.status = 'Critical';
-        mockResult.recommendation = 'Immediate replacement required. Tyre safety is compromised.';
-      } else if (mockResult.wearPercentage >= 50) {
-        mockResult.status = 'Warning';
-        mockResult.recommendation = 'Schedule replacement soon. Tread depth is below optimal level.';
-      } else {
-        mockResult.status = 'Healthy';
-        mockResult.recommendation = 'Tyre is in excellent condition. Continue regular monitoring.';
-      }
+      setAnalysisResult(result);
+      setMessage(response.data.message || '✅ Analysis completed successfully!');
+      setPredictionHistory([result, ...predictionHistory]);
       
-      setAnalysisResult(mockResult);
-      setMessage(response.data.message || 'Analysis completed successfully!');
+      setTimeout(() => setIsAnimating(false), 500);
       
     } catch (err) {
-      setError(err.response?.data?.error || 'An error occurred during upload.');
+      setError(err.response?.data?.error || err.response?.data?.message || 'An error occurred during upload.');
+      setIsAnimating(false);
     } finally {
       setLoading(false);
     }
@@ -195,6 +197,19 @@ const UploadPage = () => {
       marginTop: '2rem',
       flexWrap: 'wrap',
     },
+    mockBadge: {
+      display: 'inline-block',
+      backgroundColor: '#fff3cd',
+      color: '#856404',
+      padding: '0.25rem 0.5rem',
+      borderRadius: theme.borderRadius.sm,
+      fontSize: '0.65rem',
+      fontWeight: theme.typography.fontWeight.bold,
+      textTransform: 'uppercase',
+      letterSpacing: '0.05em',
+      border: '1px solid #ffc107',
+      marginLeft: '0.5rem',
+    },
   };
 
   return (
@@ -281,45 +296,49 @@ const UploadPage = () => {
 
         {/* Analysis Results */}
         {analysisResult && (
-          <div style={{ marginTop: '3rem' }}>
+          <div style={{ 
+            marginTop: '3rem',
+            animation: isAnimating ? 'fadeInScale 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none',
+          }}>
             <h3 style={{ 
               fontSize: theme.typography.fontSize['2xl'], 
               fontWeight: theme.typography.fontWeight.bold,
               color: theme.colors.primary,
               marginBottom: '1.5rem',
               textAlign: 'center',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.75rem',
             }}>
+              <TrendingDown size={24} />
               Analysis Results
+              {analysisResult.isMockPrediction && (
+                <span style={styles.mockBadge}>MOCK</span>
+              )}
             </h3>
 
-            <div style={styles.resultGrid}>
-              <div style={{ 
-                ...styles.resultCard, 
-                backgroundColor: theme.colors.lightBg,
-                borderRadius: theme.borderRadius.md,
-              }}>
-                <div style={styles.resultLabel}>Wear Percentage</div>
-                <div style={{ 
-                  ...styles.resultValue, 
-                  color: getWearColor(analysisResult.wearPercentage),
-                }}>
-                  {analysisResult.wearPercentage}%
-                </div>
-              </div>
-
-              <div style={{ 
-                ...styles.resultCard, 
-                backgroundColor: theme.colors.lightBg,
-                borderRadius: theme.borderRadius.md,
-              }}>
-                <div style={styles.resultLabel}>Health Status</div>
-                <div style={{ marginTop: '0.5rem' }}>
-                  <StatusBadge status={analysisResult.status} size="lg" />
-                </div>
-              </div>
+            {/* Condition Badge */}
+            <div style={{ marginBottom: '2rem' }}>
+              <ConditionBadge 
+                status={analysisResult.status}
+                size="lg"
+              />
             </div>
 
-            <div style={styles.recommendation}>
+            {/* Wear Severity Indicator */}
+            <WearSeverityIndicator 
+              wearPercentage={analysisResult.wearPercentage}
+            />
+
+            {/* Recommendation Card */}
+            <div style={{
+              ...styles.recommendation,
+              animation: 'slideUp 0.6s ease-out 0.2s both',
+              marginTop: '2rem',
+              border: `1px solid ${theme.colors.border}`,
+              boxShadow: theme.shadows.md,
+            }}>
               <div style={styles.recommendationTitle}>
                 <AlertCircle size={20} />
                 Recommendation
@@ -327,8 +346,22 @@ const UploadPage = () => {
               <p style={styles.recommendationText}>
                 {analysisResult.recommendation}
               </p>
+              <div style={{
+                marginTop: '1rem',
+                padding: '0.75rem 1rem',
+                backgroundColor: `${theme.colors.primary}10`,
+                borderRadius: theme.borderRadius.md,
+                fontSize: theme.typography.fontSize.sm,
+                color: theme.colors.textSecondary,
+              }}>
+                Model: {analysisResult.modelType}
+                {analysisResult.isMockPrediction && (
+                  <span style={styles.mockBadge}>MOCK</span>
+                )}
+              </div>
             </div>
 
+            {/* Action Buttons */}
             <div style={styles.buttonGroup}>
               <Button 
                 variant="secondary"
@@ -337,6 +370,7 @@ const UploadPage = () => {
                   setImageFile(null);
                   setAnalysisResult(null);
                   setMessage('');
+                  setIsAnimating(false);
                 }}
               >
                 Analyze Another
@@ -347,7 +381,34 @@ const UploadPage = () => {
             </div>
           </div>
         )}
+
+        {/* Prediction History */}
+        <PredictionHistory predictions={predictionHistory} />
       </Card>
+
+      <style>{`
+        @keyframes fadeInScale {
+          from {
+            opacity: 0;
+            transform: scale(0.95);
+          }
+          to {
+            opacity: 1;
+            transform: scale(1);
+          }
+        }
+
+        @keyframes slideUp {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+      `}</style>
     </div>
   );
 };
