@@ -12,10 +12,25 @@ from dotenv import load_dotenv
 from PIL import Image
 import io
 import random
+import numpy as np
 
+# Load TensorFlow model
 USE_REAL_MODEL = False
 model = None
-print("⚠ Using mock predictions (TensorFlow model conversion pending)")
+
+try:
+    import tensorflow as tf
+    MODEL_PATH = os.path.join(os.path.dirname(__file__), "ml", "models", "best_model.h5")
+    if os.path.exists(MODEL_PATH):
+        model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+        USE_REAL_MODEL = True
+        print(f"✓ TensorFlow Model Loaded: {MODEL_PATH}")
+    else:
+        print(f"⚠ Model file not found at {MODEL_PATH}")
+        print("⚠ Using mock predictions")
+except Exception as e:
+    print(f"⚠ Failed to load TensorFlow model: {e}")
+    print("⚠ Using mock predictions")
 
 load_dotenv()
 
@@ -203,14 +218,25 @@ def analyze_tire():
         image = image.resize((224, 224))
         
         if USE_REAL_MODEL:
-            # Real ML prediction
-            img_array = np.array(image) / 255.0
-            img_array = np.expand_dims(img_array, axis=0)
-            prediction = model.predict(img_array, verbose=0)
+            # Real ML prediction with proper preprocessing
+            # Convert image to numpy array and ensure 0-255 range
+            img_array = np.array(image, dtype=np.float32)
             
-            # Model outputs [healthy_prob, critical_prob]
-            healthy_prob = float(prediction[0][0])
-            critical_prob = float(prediction[0][1])
+            # The model includes a Rescaling layer that divides by 255
+            # So we pass the raw image values (0-255)
+            img_array = np.expand_dims(img_array, axis=0)
+            
+            # Debug: check image statistics
+            print(f"Image shape: {img_array.shape}, Min: {img_array.min()}, Max: {img_array.max()}")
+            
+            prediction = model.predict(img_array, verbose=0)
+            print(f"Raw predictions: {prediction}")
+            
+            # Model outputs [critical_prob, healthy_prob] - LABELS WERE SWAPPED!
+            critical_prob = float(prediction[0][0])
+            healthy_prob = float(prediction[0][1])
+            
+            print(f"Critical: {critical_prob:.4f}, Healthy: {healthy_prob:.4f}")
             
             # Determine status based on probabilities
             if critical_prob > 0.75:

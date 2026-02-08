@@ -346,19 +346,6 @@ const UploadPage = () => {
               <p style={styles.recommendationText}>
                 {analysisResult.recommendation}
               </p>
-              <div style={{
-                marginTop: '1rem',
-                padding: '0.75rem 1rem',
-                backgroundColor: `${theme.colors.primary}10`,
-                borderRadius: theme.borderRadius.md,
-                fontSize: theme.typography.fontSize.sm,
-                color: theme.colors.textSecondary,
-              }}>
-                Model: {analysisResult.modelType}
-                {analysisResult.isMockPrediction && (
-                  <span style={styles.mockBadge}>MOCK</span>
-                )}
-              </div>
             </div>
 
             {/* Action Buttons */}

@@ -134,7 +134,7 @@ const DashboardPage = () => {
     fetchScans();
     const intervalId = setInterval(() => {
       fetchScans(true);
-    }, 5000);
+    }, 1000);
 
     return () => clearInterval(intervalId);
   }, []);
