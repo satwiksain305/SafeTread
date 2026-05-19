@@ -1,19 +1,12 @@
-import json
 import os
-import sys
 import logging
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from pymongo import MongoClient
-from bson import ObjectId
 import datetime
 import bcrypt
 import jwt
 from dotenv import load_dotenv
-from PIL import Image
-import io
-import random
-import numpy as np
 from routes.prediction_routes import create_prediction_blueprint
 
 # ===== Register GetItem custom layer BEFORE importing any models =====
@@ -53,7 +46,6 @@ model = None
 
 try:
     import tensorflow as tf
-    from tensorflow.keras.applications.resnet import preprocess_input
     MODEL_DIR = os.path.join(os.path.dirname(__file__), "ml", "models")
     model_candidates = [
         os.path.join(MODEL_DIR, "best_model_FINAL_95PERCENT.keras"),  # NEW: 95% accuracy model
