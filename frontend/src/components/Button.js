@@ -1,11 +1,11 @@
 import React from 'react';
 import { theme } from '../config/theme';
 
-const Button = ({ 
-  children, 
-  variant = 'primary', 
-  size = 'md', 
-  onClick, 
+const Button = ({
+  children,
+  variant = 'primary',
+  size = 'md',
+  onClick,
   disabled = false,
   fullWidth = false,
   type = 'button',

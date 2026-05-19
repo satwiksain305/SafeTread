@@ -78,3 +78,12 @@ tmp/
 
 # Nested repo (ignore)
 SafeTread-W/
+
+# App Data
+uploads/
+outputs/
+models/
+backend/reports/
+reports/
+*.pt
+*.pth

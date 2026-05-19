@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Filter, Download, Eye, Calendar, RefreshCw } from 'lucide-react';
+import { Filter, Download, Calendar, RefreshCw } from 'lucide-react';
 import { theme } from '../config/theme';
 import apiClient from '../api/axios';
 import Card from '../components/Card';
@@ -16,20 +16,32 @@ const ReportsPage = () => {
       setLoading(true);
     }
     try {
-      const response = await apiClient.get('/tire-history');
+      const response = await apiClient.get('/api/prediction-history');
       console.log('Fetched tire history:', response.data);
+      
+      const historyItems = response.data.history || [];
       // Transform backend response to match table format
-      const scans = response.data.map((item, index) => {
-        const analyzedDate = new Date(item.analyzed_at);
+      const scans = historyItems.map((item, index) => {
+        // Use the full ISO timestamp for accurate date AND time
+        const rawDateStr = item.created_at || item.analyzed_at || null;
+        let analyzedDate = rawDateStr ? new Date(rawDateStr) : null;
+        if (!analyzedDate || isNaN(analyzedDate.getTime())) {
+          analyzedDate = null; // we have no valid time
+        }
+
         return {
-          id: index + 1,
-          date: analyzedDate.toISOString().split('T')[0],
-          time: analyzedDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-          wear: item.wear_percentage,
-          status: item.status,
-          recommendation: item.recommendation,
-          isMockPrediction: item.model_used === 'Mock',
-          image: '/placeholder.jpg',
+          id: item.id || index + 1,
+          date: analyzedDate
+            ? analyzedDate.toLocaleDateString('en-CA') // YYYY-MM-DD in local timezone
+            : (item.date || 'Unknown'),
+          time: analyzedDate
+            ? analyzedDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
+            : 'N/A',
+          wear: item.wear_level != null ? Math.round(item.wear_level) : (100 - (item.health_score || 0)),
+          status: item.prediction || item.status || 'Unknown',
+          recommendation: item.recommendation || 'N/A',
+          isMockPrediction: item.model_used === 'Mock' || item.model_type?.includes('Mock'),
+          image: item.image_path ? `http://127.0.0.1:5000/${item.image_path}` : '/placeholder.jpg',
           rawData: item,
         };
       });
@@ -56,9 +68,9 @@ const ReportsPage = () => {
     return () => clearInterval(intervalId);
   }, []);
 
-  const filteredScans = filterStatus === 'all' 
-    ? allScans 
-    : allScans.filter(scan => scan.status.toLowerCase() === filterStatus.toLowerCase());
+  const filteredScans = filterStatus === 'all'
+    ? allScans
+    : allScans.filter(scan => (scan.status || '').toLowerCase() === filterStatus.toLowerCase());
 
   const styles = {
     container: {
@@ -170,12 +182,39 @@ const ReportsPage = () => {
   };
 
   const getStatusCount = (status) => {
-    return allScans.filter(scan => scan.status.toLowerCase() === status.toLowerCase()).length;
+    return allScans.filter(scan => (scan.status || '').toLowerCase() === (status || '').toLowerCase()).length;
   };
 
   const handleExport = () => {
-    // Mock export functionality
-    alert('Export functionality would download a CSV/PDF report');
+    if (allScans.length === 0) {
+      alert('No scan history to export.');
+      return;
+    }
+    // Helper: format date as "08-Mar-2026" so Excel never auto-converts it
+    const formatDateSafe = (isoDate) => {
+      if (!isoDate || isoDate === 'Unknown') return isoDate || '';
+      const d = new Date(isoDate + 'T00:00:00'); // parse as local date
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+    };
+    const headers = ['Date', 'Wear %', 'Status', 'Recommendation'];
+    const rows = allScans.map(scan => [
+      `"${formatDateSafe(scan.date)}"`, // quoted safe date
+      `${scan.wear}%`,
+      scan.status,
+      `"${(scan.recommendation || '').replace(/"/g, '""')}"`,
+    ]);
+    // Add UTF-8 BOM so Excel opens file with correct encoding
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `SafeTread_History_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -186,27 +225,27 @@ const ReportsPage = () => {
         <div style={styles.filterContainer}>
           <Filter size={20} style={{ color: theme.colors.textSecondary }} />
           <span style={styles.filterLabel}>Filter:</span>
-          <select 
+          <select
             style={styles.select}
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
           >
             <option value="all">All Status</option>
             <option value="healthy">Healthy</option>
-            <option value="good">Good</option>
-            <option value="warning">Warning</option>
+            <option value="moderate wear">Moderate Wear</option>
+            <option value="worn">Worn</option>
             <option value="critical">Critical</option>
           </select>
-          <Button 
-            variant="secondary" 
+          <Button
+            variant="secondary"
             size="sm"
             icon={<RefreshCw size={16} />}
             onClick={fetchScans}
           >
             Refresh
           </Button>
-          <Button 
-            variant="secondary" 
+          <Button
+            variant="secondary"
             size="sm"
             icon={<Download size={16} />}
             onClick={handleExport}
@@ -252,7 +291,6 @@ const ReportsPage = () => {
               <thead>
                 <tr>
                   <th style={styles.th}>Date</th>
-                  <th style={styles.th}>Time</th>
                   <th style={styles.th}>Wear %</th>
                   <th style={styles.th}>Status</th>
                   <th style={styles.th}>Recommendation</th>
@@ -268,19 +306,18 @@ const ReportsPage = () => {
                         {scan.date}
                       </div>
                     </td>
-                    <td style={styles.td}>{scan.time}</td>
                     <td style={styles.td}>
-                      <span style={{ 
+                      <span style={{
                         fontWeight: theme.typography.fontWeight.semibold,
-                        color: scan.wear >= 75 ? theme.colors.danger : 
-                               scan.wear >= 50 ? theme.colors.warning : 
-                               theme.colors.success,
+                        color: scan.wear >= 75 ? theme.colors.danger :
+                          scan.wear >= 50 ? theme.colors.warning :
+                            theme.colors.success,
                       }}>
                         {scan.wear}%
                       </span>
                     </td>
                     <td style={styles.td}>
-                      <div style={{display: 'flex', alignItems: 'center'}}>
+                      <div style={{ display: 'flex', alignItems: 'center' }}>
                         <StatusBadge status={scan.status} size="sm" />
                         {scan.isMockPrediction && <span style={styles.mockBadge}>MOCK</span>}
                       </div>
@@ -288,19 +325,18 @@ const ReportsPage = () => {
                     <td style={styles.td}>{scan.recommendation}</td>
                     <td style={styles.td}>
                       <div style={styles.actionButtons}>
-                        <Button 
-                          variant="ghost" 
-                          size="sm"
-                          icon={<Eye size={14} />}
-                          onClick={() => alert(`Viewing details for scan #${scan.id}`)}
-                        >
-                          View
-                        </Button>
-                        <Button 
-                          variant="ghost" 
+                        <Button
+                          variant="ghost"
                           size="sm"
                           icon={<Download size={14} />}
-                          onClick={() => alert(`Downloading report for scan #${scan.id}`)}
+                          onClick={() => {
+                            const reportId = scan.rawData?._id || scan.rawData?.id;
+                            if (reportId && reportId !== 'None') {
+                              window.open(`http://localhost:5000/api/download-report/${reportId}`, '_blank');
+                            } else {
+                              alert('PDF Report not available for this record');
+                            }
+                          }}
                         >
                           Download
                         </Button>

@@ -1,12 +1,18 @@
 import React, { useState } from 'react';
-import { Link, NavLink } from 'react-router-dom';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Menu, X, Settings, LogOut, BarChart3, Upload, Info, Home } from 'lucide-react';
 import { theme } from '../config/theme';
 
 const Navbar = () => {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const handleLogout = () => {
+    logout();
+    navigate('/');
+  };
 
   const styles = {
     nav: {
@@ -159,7 +165,7 @@ const Navbar = () => {
                   Settings
                 </NavLinkComponent>
                 <button 
-                  onClick={logout} 
+                  onClick={handleLogout} 
                   style={styles.button}
                   onMouseEnter={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.1)'}
                   onMouseLeave={(e) => e.target.style.backgroundColor = 'transparent'}
@@ -218,7 +224,7 @@ const Navbar = () => {
                 <NavLinkComponent to="/settings" icon={<Settings size={18} />}>
                   Settings
                 </NavLinkComponent>
-                <button onClick={logout} style={styles.button}>
+                <button onClick={handleLogout} style={styles.button}>
                   <LogOut size={18} />
                   Logout
                 </button>

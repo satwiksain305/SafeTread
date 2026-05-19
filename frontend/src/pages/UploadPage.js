@@ -20,6 +20,32 @@ const UploadPage = () => {
   const [predictionHistory, setPredictionHistory] = useState([]);
   const [isAnimating, setIsAnimating] = useState(false);
   const navigate = useNavigate();
+  const isLoggedIn = Boolean(localStorage.getItem('token'));
+  
+  useEffect(() => {
+    const fetchHistory = async () => {
+      if (!isLoggedIn) return;
+      
+      try {
+        const response = await apiClient.get('/api/prediction-history');
+        if (response.data?.status === 'success' || response.data?.history) {
+          const history = (response.data.history || []).map(item => ({
+            wearPercentage: item.wear_level ?? (100 - (item.health_score || 0)),
+            status: item.status || item.prediction,
+            recommendation: item.recommendation,
+            timestamp: item.date || item.analyzed_at || new Date().toISOString(),
+            predictionId: item._id || item.id,
+            id: item._id || item.id,
+          }));
+          setPredictionHistory(history);
+        }
+      } catch (err) {
+        console.error('Failed to fetch prediction history:', err);
+      }
+    };
+
+    fetchHistory();
+  }, [isLoggedIn]);
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
@@ -27,7 +53,7 @@ const UploadPage = () => {
       setImageFile(file);
       setError('');
       setAnalysisResult(null);
-      
+
       const reader = new FileReader();
       reader.onloadend = () => {
         setPreview(reader.result);
@@ -54,28 +80,41 @@ const UploadPage = () => {
     formData.append('image', imageFile);
 
     try {
-      const response = await apiClient.post('/analyze-tire', formData, {
+      const endpoint = isLoggedIn ? '/api/predict-user' : '/api/predict-demo';
+
+      const response = await apiClient.post(endpoint, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
-      
+
+      if (response.data?.status === 'limit_reached') {
+        setError(response.data?.message || 'Free trial limit reached. Please create an account to continue.');
+        setIsAnimating(false);
+        return;
+      }
+
       const result = {
-        wearPercentage: response.data.wear_percentage,
+        wearPercentage: response.data.wear_level,
         status: response.data.status,
         recommendation: response.data.recommendation,
-        confidence: response.data.confidence,
-        modelType: response.data.model_type,
-        isMockPrediction: response.data.is_mock_prediction,
+        riskLevel: response.data.risk_level,
+        remainingLife: response.data.remaining_life,
+        confidence: response.data.confidence_score ?? (response.data.confidence * 100) ?? 0,
+        modelType: response.data.model_type || 'SafeTread AI',
+        isMockPrediction: Boolean(response.data.is_mock_prediction),
         timestamp: new Date().toISOString(),
+        heatmapUrl: response.data.heatmap_url || null,
+        predictionId: response.data.prediction_id || null,
+        id: response.data.prediction_id || null,
       };
-      
+
       setAnalysisResult(result);
       setMessage(response.data.message || '✅ Analysis completed successfully!');
       setPredictionHistory([result, ...predictionHistory]);
-      
+
       setTimeout(() => setIsAnimating(false), 500);
-      
+
     } catch (err) {
       setError(err.response?.data?.error || err.response?.data?.message || 'An error occurred during upload.');
       setIsAnimating(false);
@@ -223,7 +262,7 @@ const UploadPage = () => {
         <form onSubmit={handleSubmit}>
           {/* Upload Area */}
           {!preview && (
-            <label 
+            <label
               style={{
                 ...styles.uploadArea,
                 ...(imageFile && styles.uploadAreaActive),
@@ -251,8 +290,8 @@ const UploadPage = () => {
           {preview && (
             <div style={styles.previewContainer}>
               <img src={preview} alt="Tyre preview" style={styles.preview} />
-              <Button 
-                variant="ghost" 
+              <Button
+                variant="ghost"
                 onClick={() => {
                   setPreview(null);
                   setImageFile(null);
@@ -282,8 +321,8 @@ const UploadPage = () => {
           {/* Submit Button */}
           {imageFile && !analysisResult && (
             <div style={{ marginTop: '2rem', textAlign: 'center' }}>
-              <Button 
-                type="submit" 
+              <Button
+                type="submit"
                 size="lg"
                 disabled={loading}
                 icon={loading ? <Loader size={20} className="animate-spin" /> : <Camera size={20} />}
@@ -296,12 +335,12 @@ const UploadPage = () => {
 
         {/* Analysis Results */}
         {analysisResult && (
-          <div style={{ 
+          <div style={{
             marginTop: '3rem',
             animation: isAnimating ? 'fadeInScale 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none',
           }}>
-            <h3 style={{ 
-              fontSize: theme.typography.fontSize['2xl'], 
+            <h3 style={{
+              fontSize: theme.typography.fontSize['2xl'],
               fontWeight: theme.typography.fontWeight.bold,
               color: theme.colors.primary,
               marginBottom: '1.5rem',
@@ -320,16 +359,30 @@ const UploadPage = () => {
 
             {/* Condition Badge */}
             <div style={{ marginBottom: '2rem' }}>
-              <ConditionBadge 
+              <ConditionBadge
                 status={analysisResult.status}
                 size="lg"
               />
             </div>
 
             {/* Wear Severity Indicator */}
-            <WearSeverityIndicator 
+            <WearSeverityIndicator
               wearPercentage={analysisResult.wearPercentage}
             />
+
+
+
+            {/* Heatmap Preview */}
+            {analysisResult.heatmapUrl && (
+              <div style={{ marginTop: '2rem', textAlign: 'center' }}>
+                <h4 style={{ fontSize: theme.typography.fontSize.lg, color: theme.colors.primary, marginBottom: '1rem' }}>GradCAM Wear Heatmap</h4>
+                <img
+                  src={`http://localhost:5000${analysisResult.heatmapUrl}`}
+                  alt="Tire Wear Heatmap"
+                  style={{ maxWidth: '100%', maxHeight: '250px', borderRadius: theme.borderRadius.md, boxShadow: theme.shadows.md }}
+                />
+              </div>
+            )}
 
             {/* Recommendation Card */}
             <div style={{
@@ -350,7 +403,8 @@ const UploadPage = () => {
 
             {/* Action Buttons */}
             <div style={styles.buttonGroup}>
-              <Button 
+
+              <Button
                 variant="secondary"
                 onClick={() => {
                   setPreview(null);

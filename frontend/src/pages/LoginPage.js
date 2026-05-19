@@ -26,7 +26,8 @@ const LoginPage = () => {
       await login(email, password);
       navigate('/dashboard');
     } catch (err) {
-      setError('Invalid email or password');
+      const backendMessage = err?.response?.data?.message;
+      setError(backendMessage || 'Invalid email or password');
       console.error(err);
     }
   };

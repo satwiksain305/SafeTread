@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Activity, AlertTriangle, CheckCircle, Clock, RefreshCw } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -10,6 +10,21 @@ import Button from '../components/Button';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../api/axios';
 
+// Module-level helper — no stale closure possible
+const computeTimeAgo = (date) => {
+  if (!date) return 'No scans yet';
+  const timeDiff = Date.now() - date.getTime();
+  if (timeDiff < 0) return 'Just now';
+  const seconds = Math.floor(timeDiff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours   = Math.floor(minutes / 60);
+  const days    = Math.floor(hours   / 24);
+  if (seconds < 60) return 'Just now';
+  if (minutes < 60) return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
+  if (hours   < 24) return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
+  return `${days} day${days !== 1 ? 's' : ''} ago`;
+};
+
 const DashboardPage = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -18,9 +33,11 @@ const DashboardPage = () => {
   const [dashboardData, setDashboardData] = useState({
     tyreHealth: 0,
     status: 'Unknown',
-    lastScanTime: 'No scans yet',
     totalScans: 0,
   });
+  const [lastScanTimeAgo, setLastScanTimeAgo] = useState('No scans yet');
+  // Keep a ref to the latest scan date so the tick interval never reads stale state
+  const lastScanDateRef = useRef(null);
   const [trendData, setTrendData] = useState([]);
   const [statusDistribution, setStatusDistribution] = useState([]);
 
@@ -29,18 +46,37 @@ const DashboardPage = () => {
       setLoading(true);
     }
     try {
-      const response = await apiClient.get('/tire-history');
-      const scans = response.data.map((item, index) => {
-        const analyzedDate = new Date(item.analyzed_at);
+      // Use the correct endpoint that returns prediction history
+      const response = await apiClient.get('/api/prediction-history');
+      const historyItems = response.data.history || [];
+      const scans = historyItems.map((item, index) => {
+        // Only use the created_at field for time — it is a full ISO datetime string
+        // IMPORTANT: bare 'YYYY-MM-DD' strings (item.date) parse as midnight UTC in JS,
+        // causing a wrong ~20h offset. We must ONLY use full datetime strings with a time component.
+        const rawDateStr = item.created_at || item.analyzed_at || null;
+        
+        let analyzedDate = null;
+        if (rawDateStr) {
+          const parsed = new Date(rawDateStr);
+          // Only accept if it has a real time component (not midnight UTC from a date-only parse)
+          // Check if the rawDateStr contains 'T' (has time part) or is a full ISO with time
+          const hasTimeComponent = rawDateStr.includes('T') || /\d{4}-\d{2}-\d{2}T/.test(rawDateStr);
+          if (!isNaN(parsed.getTime()) && hasTimeComponent) {
+            analyzedDate = parsed;
+          }
+        }
+
+        // Read wear_level (new field) or fall back to 100 - health_score
+        const rawWear = item.wear_level != null ? item.wear_level : (100 - (item.health_score || 0));
+        const wear = isNaN(parseFloat(rawWear)) ? 0 : Math.round(parseFloat(rawWear));
         return {
-          id: index + 1,
-          date: analyzedDate.toISOString().split('T')[0],
-          time: analyzedDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-          wear: item.wear_percentage,
-          status: item.status,
-          recommendation: item.recommendation,
-          isMockPrediction: item.model_used === 'Mock',
-          analyzedAt: analyzedDate,
+          id: item.id || index + 1,
+          date: item.date || (analyzedDate ? analyzedDate.toLocaleDateString('en-CA') : 'Unknown'),
+          wear,
+          status: item.prediction || item.status || 'Unknown',
+          recommendation: item.recommendation || '',
+          isMockPrediction: item.model_used === 'Mock' || item.model_type?.includes?.('Mock'),
+          analyzedAt: analyzedDate, // null if no real datetime available
           rawData: item,
         };
       });
@@ -63,34 +99,28 @@ const DashboardPage = () => {
 
   const calculateDashboardData = (scans) => {
     if (scans.length === 0) {
-      setDashboardData({
-        tyreHealth: 0,
-        status: 'No Data',
-        lastScanTime: 'No scans yet',
-        totalScans: 0,
-      });
+      setDashboardData({ tyreHealth: 0, status: 'No Data', totalScans: 0 });
+      lastScanDateRef.current = null;
+      setLastScanTimeAgo('No scans yet');
       return;
     }
 
     const latestScan = scans[0];
-    const now = new Date();
-    const timeDiff = now - latestScan.analyzedAt;
-    const minutes = Math.floor(timeDiff / 60000);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
+    const lastScanDate =
+      latestScan.analyzedAt instanceof Date && !isNaN(latestScan.analyzedAt)
+        ? latestScan.analyzedAt
+        : null;
 
-    let timeAgo;
-    if (minutes < 1) timeAgo = 'Just now';
-    else if (minutes < 60) timeAgo = `${minutes}m ago`;
-    else if (hours < 24) timeAgo = `${hours}h ago`;
-    else timeAgo = `${days}d ago`;
+    // Update the ref first so the interval always reads the fresh value
+    lastScanDateRef.current = lastScanDate;
 
     setDashboardData({
       tyreHealth: latestScan.wear,
       status: latestScan.status,
-      lastScanTime: timeAgo,
       totalScans: scans.length,
     });
+    // Compute immediately — no stale closure risk because computeTimeAgo is module-level
+    setLastScanTimeAgo(computeTimeAgo(lastScanDate));
   };
 
   const generateTrendData = (scans) => {
@@ -102,7 +132,8 @@ const DashboardPage = () => {
     const last7Scans = scans.slice(0, 7).reverse();
     const trend = last7Scans.map(scan => ({
       date: new Date(scan.analyzedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      wear: scan.wear,
+      // Ensure wear is always a valid number for the chart
+      wear: typeof scan.wear === 'number' && !isNaN(scan.wear) ? scan.wear : 0,
       threshold: 50,
     }));
     setTrendData(trend);
@@ -132,12 +163,21 @@ const DashboardPage = () => {
 
   useEffect(() => {
     fetchScans();
-    const intervalId = setInterval(() => {
+    // Refresh data every 30 seconds in the background
+    const dataIntervalId = setInterval(() => {
       fetchScans(true);
-    }, 1000);
-
-    return () => clearInterval(intervalId);
+    }, 30000);
+    return () => clearInterval(dataIntervalId);
   }, []);
+
+  // Independently refresh the "Last Scan" time label every 60 seconds
+  // Uses a ref so the closure always reads the latest date, never stale
+  useEffect(() => {
+    const tickIntervalId = setInterval(() => {
+      setLastScanTimeAgo(computeTimeAgo(lastScanDateRef.current));
+    }, 60000);
+    return () => clearInterval(tickIntervalId);
+  }, []); // empty deps — ref never triggers re-subscription
 
   const recentScans = allScans.slice(0, 3);
 
@@ -267,25 +307,18 @@ const DashboardPage = () => {
             </div>
           )}
 
-          {/* Metrics Grid */}
+          {/* Metrics Grid — only Current Status, Last Scan, Total Scans */}
           <div style={styles.metricsGrid}>
-            <MetricCard
-              title="Tyre Health"
-              value={`${100 - dashboardData.tyreHealth}%`}
-              subtitle="Current tread depth remaining"
-              icon={<Activity size={24} />}
-              color={dashboardData.tyreHealth >= 50 ? theme.colors.danger : dashboardData.tyreHealth >= 33 ? theme.colors.warning : theme.colors.success}
-            />
             <MetricCard
               title="Current Status"
               value={dashboardData.status}
               subtitle="Overall tyre condition"
               icon={dashboardData.tyreHealth >= 50 ? <AlertTriangle size={24} /> : <CheckCircle size={24} />}
-              color={dashboardData.tyreHealth >= 50 ? theme.colors.danger : dashboardData.tyreHealth >= 33 ? theme.colors.warning : theme.colors.success}
+              color={dashboardData.tyreHealth >= 80 ? theme.colors.danger : dashboardData.tyreHealth >= 50 ? theme.colors.warning : theme.colors.success}
             />
             <MetricCard
               title="Last Scan"
-              value={dashboardData.lastScanTime}
+              value={lastScanTimeAgo}
               subtitle="Most recent analysis"
               icon={<Clock size={24} />}
               color={theme.colors.secondary}
@@ -305,45 +338,45 @@ const DashboardPage = () => {
             <Card title="Tread Wear Trend" subtitle={`${trendData.length > 0 ? 'Recent' : 'No'} wear progression`}>
               {trendData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={trendData}>
-              <CartesianGrid strokeDasharray="3 3" stroke={theme.colors.border} />
-              <XAxis 
-                dataKey="date" 
-                stroke={theme.colors.textSecondary}
-                style={{ fontSize: '12px' }}
-              />
-              <YAxis 
-                stroke={theme.colors.textSecondary}
-                style={{ fontSize: '12px' }}
-                label={{ value: 'Wear %', angle: -90, position: 'insideLeft' }}
-              />
-              <Tooltip 
-                contentStyle={{ 
-                  backgroundColor: theme.colors.cardBg,
-                  border: `1px solid ${theme.colors.border}`,
-                  borderRadius: theme.borderRadius.md,
-                }}
-              />
-              <Legend />
-              <Line 
-                type="monotone" 
-                dataKey="wear" 
-                stroke={theme.colors.secondary} 
-                strokeWidth={3}
-                name="Wear Level"
-                dot={{ fill: theme.colors.secondary, r: 5 }}
-              />
-              <Line 
-                type="monotone" 
-                dataKey="threshold" 
-                stroke={theme.colors.danger} 
-                strokeDasharray="5 5"
-                strokeWidth={2}
-                name="Warning Threshold"
-                dot={false}
-              />
-                </LineChart>
-              </ResponsiveContainer>
+                  <LineChart data={trendData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={theme.colors.border} />
+                    <XAxis
+                      dataKey="date"
+                      stroke={theme.colors.textSecondary}
+                      style={{ fontSize: '12px' }}
+                    />
+                    <YAxis
+                      stroke={theme.colors.textSecondary}
+                      style={{ fontSize: '12px' }}
+                      label={{ value: 'Wear %', angle: -90, position: 'insideLeft' }}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: theme.colors.cardBg,
+                        border: `1px solid ${theme.colors.border}`,
+                        borderRadius: theme.borderRadius.md,
+                      }}
+                    />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="wear"
+                      stroke={theme.colors.secondary}
+                      strokeWidth={3}
+                      name="Wear Level"
+                      dot={{ fill: theme.colors.secondary, r: 5 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="threshold"
+                      stroke={theme.colors.danger}
+                      strokeDasharray="5 5"
+                      strokeWidth={2}
+                      name="Warning Threshold"
+                      dot={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
               ) : (
                 <div style={{ padding: '3rem', textAlign: 'center', color: theme.colors.textSecondary }}>
                   No trend data available yet
@@ -356,15 +389,15 @@ const DashboardPage = () => {
               {statusDistribution.length > 0 && statusDistribution.some(s => s.count > 0) ? (
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={statusDistribution}>
-              <CartesianGrid strokeDasharray="3 3" stroke={theme.colors.border} />
-              <XAxis dataKey="status" stroke={theme.colors.textSecondary} />
-              <YAxis stroke={theme.colors.textSecondary} />
-              <Tooltip 
-                contentStyle={{ 
-                  backgroundColor: theme.colors.cardBg,
-                  border: `1px solid ${theme.colors.border}`,
-                }}
-              />
+                    <CartesianGrid strokeDasharray="3 3" stroke={theme.colors.border} />
+                    <XAxis dataKey="status" stroke={theme.colors.textSecondary} />
+                    <YAxis stroke={theme.colors.textSecondary} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: theme.colors.cardBg,
+                        border: `1px solid ${theme.colors.border}`,
+                      }}
+                    />
                     <Bar dataKey="count" fill={theme.colors.secondary} radius={[8, 8, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -380,51 +413,51 @@ const DashboardPage = () => {
           <Card title="Recent Scans" subtitle="Your latest tyre analyses">
             {recentScans.length > 0 ? (
               <table style={styles.table}>
-          <thead>
-            <tr>
-              <th style={styles.th}>Date</th>
-              <th style={styles.th}>Wear %</th>
-              <th style={styles.th}>Status</th>
-              <th style={styles.th}>Recommendation</th>
-              <th style={styles.th}>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-                {recentScans.map((scan) => (
-                  <tr key={scan.id}>
-                    <td style={styles.td}>{scan.date}</td>
-                    <td style={styles.td}>{scan.wear}%</td>
-                    <td style={styles.td}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <StatusBadge status={scan.status} size="sm" />
-                        {scan.isMockPrediction && (
-                          <span style={{
-                            fontSize: '10px',
-                            padding: '2px 6px',
-                            backgroundColor: '#FFA50033',
-                            color: '#FF8C00',
-                            borderRadius: '4px',
-                            fontWeight: 'bold',
-                          }}>
-                            MOCK
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td style={styles.td}>{scan.recommendation}</td>
-                    <td style={styles.td}>
-                      <Button 
-                        variant="ghost" 
-                        size="sm"
-                        onClick={() => navigate('/reports')}
-                      >
-                        View
-                      </Button>
-                    </td>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Date</th>
+                    <th style={styles.th}>Wear %</th>
+                    <th style={styles.th}>Status</th>
+                    <th style={styles.th}>Recommendation</th>
+                    <th style={styles.th}>Action</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {recentScans.map((scan) => (
+                    <tr key={scan.id}>
+                      <td style={styles.td}>{scan.date}</td>
+                      <td style={styles.td}>{scan.wear}%</td>
+                      <td style={styles.td}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <StatusBadge status={scan.status} size="sm" />
+                          {scan.isMockPrediction && (
+                            <span style={{
+                              fontSize: '10px',
+                              padding: '2px 6px',
+                              backgroundColor: '#FFA50033',
+                              color: '#FF8C00',
+                              borderRadius: '4px',
+                              fontWeight: 'bold',
+                            }}>
+                              MOCK
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td style={styles.td}>{scan.recommendation}</td>
+                      <td style={styles.td}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => navigate('/reports')}
+                        >
+                          View
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             ) : (
               <div style={{ padding: '2rem', textAlign: 'center', color: theme.colors.textSecondary }}>
                 No recent scans available
