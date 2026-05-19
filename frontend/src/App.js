@@ -23,9 +23,9 @@ const App = () => {
             <Route path="about" element={<AboutPage />} />
             <Route path="login" element={<LoginPage />} />
             <Route path="register" element={<RegisterPage />} />
+            <Route path="upload" element={<UploadPage />} />
             <Route element={<ProtectedRoute />}>
               <Route path="dashboard" element={<DashboardPage />} />
-              <Route path="upload" element={<UploadPage />} />
               <Route path="reports" element={<ReportsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="tire-data" element={<TireDataPage />} />

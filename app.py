@@ -1,41 +1,101 @@
-import json
 import os
-import sys
-from flask import Flask, request, jsonify
+import logging
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from pymongo import MongoClient
-from bson import ObjectId
 import datetime
 import bcrypt
 import jwt
 from dotenv import load_dotenv
-from PIL import Image
-import io
-import random
-import numpy as np
+from routes.prediction_routes import create_prediction_blueprint
+
+# ===== Register GetItem custom layer BEFORE importing any models =====
+try:
+    import tensorflow as tf
+    
+    # Enable unsafe deserialization for Lambda layers (safe for our own trained models)
+    tf.keras.config.enable_unsafe_deserialization()
+    
+    class GetItem(tf.keras.layers.Layer):
+        """Custom layer to handle indexing operations during model deserialization"""
+        def __init__(self, index=None, **kwargs):
+            super().__init__(**kwargs)
+            self.index = index
+        
+        def call(self, inputs):
+            if self.index is not None:
+                return inputs[self.index]
+            return inputs
+        
+        def get_config(self):
+            config = super().get_config()
+            config.update({'index': self.index})
+            return config
+    
+    # Register custom object globally
+    tf.keras.utils.get_custom_objects()['GetItem'] = GetItem
+    print("[OK] Registered GetItem custom layer")
+    print("[OK] Enabled Lambda layer deserialization")
+except ImportError:
+    print("[WARN] TensorFlow not available")
 
 # Load TensorFlow model
 USE_REAL_MODEL = False
+USE_MOBILENETV2 = False
 model = None
 
 try:
     import tensorflow as tf
-    MODEL_PATH = os.path.join(os.path.dirname(__file__), "ml", "models", "best_model.h5")
-    if os.path.exists(MODEL_PATH):
-        model = tf.keras.models.load_model(MODEL_PATH, compile=False)
-        USE_REAL_MODEL = True
-        print(f"✓ TensorFlow Model Loaded: {MODEL_PATH}")
+    MODEL_DIR = os.path.join(os.path.dirname(__file__), "ml", "models")
+    model_candidates = [
+        os.path.join(MODEL_DIR, "best_model_FINAL_95PERCENT.keras"),  # NEW: 95% accuracy model
+        os.path.join(MODEL_DIR, "best_model_REAL_95PERCENT.keras"),   # Backup
+        os.path.join(MODEL_DIR, "best_model_finetuned.h5"),
+        os.path.join(MODEL_DIR, "best_mobilenetv2.h5"),
+        os.path.join(MODEL_DIR, "best_model.h5"),
+    ]
+
+    MODEL_PATH = next((p for p in model_candidates if os.path.exists(p)), None)
+    if MODEL_PATH:
+        try:
+            # Load the model (no special handling needed for .keras format)
+            model = tf.keras.models.load_model(MODEL_PATH, compile=False, safe_mode=False)
+            USE_REAL_MODEL = True
+            USE_MOBILENETV2 = os.path.basename(MODEL_PATH) == "best_mobilenetv2.h5"
+            print(f"[OK] TensorFlow Model Loaded: {MODEL_PATH}")
+            print(f"  Model type: {type(model).__name__}")
+            print(f"  Input shape: {model.input_shape}")
+            print(f"  Output shape: {model.output_shape}")
+        except Exception as e:
+            print(f"[WARN] Failed to load TensorFlow model: {e}")
+            print("[WARN] Using mock predictions")
     else:
-        print(f"⚠ Model file not found at {MODEL_PATH}")
-        print("⚠ Using mock predictions")
+        print("[WARN] No model file found in ml/models")
 except Exception as e:
-    print(f"⚠ Failed to load TensorFlow model: {e}")
-    print("⚠ Using mock predictions")
+    print(f"[WARN] TensorFlow error: {e}")
+    print("[WARN] Using mock predictions")
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}})
+
+LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_PATH = os.path.join(LOG_DIR, "safetread.log")
+
+logger = logging.getLogger("safetread")
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+
+    file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://safetread_user:Safetread123@safetread.io1oksf.mongodb.net/?appName=SafeTread")
 MONGODB_DB = os.getenv("MONGODB_DB", "SafeTreadDB")
@@ -43,21 +103,31 @@ MONGODB_DB = os.getenv("MONGODB_DB", "SafeTreadDB")
 try:
     client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
     client.admin.command('ping')
-    print(f"✓ MongoDB Connected: {MONGODB_DB}")
+    print(f"[OK] MongoDB Connected: {MONGODB_DB}")
 except Exception as e:
-    print(f"✗ MongoDB Connection Failed: {e}")
+    print(f"[ERROR] MongoDB Connection Failed: {e}")
     try:
         client = MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=3000)
-        print("⚠ Using local MongoDB fallback")
+        print("[WARN] Using local MongoDB fallback")
     except:
-        print("✗ No database connection available")
+        print("[ERROR] No database connection available")
 
 db = client[MONGODB_DB]
 users_collection = db["users"]
 
 JWT_SECRET = os.getenv("JWT_SECRET", "your_super_secret_key")
 JWT_ALGORITHM = "HS256"
-JWT_EXP_DELTA_SECONDS = 3600
+JWT_EXP_DELTA_SECONDS = 86400 # 24 hours
+
+prediction_bp = create_prediction_blueprint(
+    db=db,
+    model=model,
+    use_real_model=USE_REAL_MODEL,
+    use_mobilenetv2=USE_MOBILENETV2,
+    jwt_secret=JWT_SECRET,
+    jwt_algorithm=JWT_ALGORITHM,
+)
+app.register_blueprint(prediction_bp)
 
 def serialize_doc(doc):
     """Convert MongoDB ObjectId to string and format dates"""
@@ -91,6 +161,12 @@ def token_required(f):
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"message": "Welcome to SafeTread API 🚗", "status": "running"}), 200
+
+
+@app.route("/outputs/<path:filename>", methods=["GET"])
+def serve_outputs(filename):
+    outputs_dir = os.path.join(os.path.dirname(__file__), "outputs")
+    return send_from_directory(outputs_dir, filename)
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -139,7 +215,7 @@ def login_user():
 
     user = db.users.find_one({"email": email})
     if not user:
-        return jsonify({"message": "Invalid email or password"}), 401
+        return jsonify({"message": "User not found. Please register first."}), 404
 
     stored_password = user["password"]
     if isinstance(stored_password, str):
@@ -166,7 +242,9 @@ def get_profile():
     return jsonify({"message": "Profile fetched successfully", "user": serialize_doc(user)}), 200
 
 @app.route("/users", methods=["GET"])
+@token_required
 def get_users():
+    """List registered users — requires a valid JWT token."""
     users = users_collection.find({})
     users_list = []
     for user in users:
@@ -194,104 +272,15 @@ def upload_tire_data():
 
 @app.route("/analyze-tire", methods=["POST"])
 def analyze_tire():
-    """Analyze tire image and return wear analysis with mock/real predictions"""
-    user_email = "guest"
-    token = request.headers.get("Authorization")
-    if token and token.startswith("Bearer "):
-        try:
-            payload = jwt.decode(token.split(" ")[1], JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            user_email = payload.get("email", "guest")
-        except Exception:
-            pass
-
-    if 'image' not in request.files:
-        return jsonify({"error": "No image file provided"}), 400
-    
-    file = request.files['image']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-    
-    try:
-        # Read and preprocess image
-        image_bytes = file.read()
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        image = image.resize((224, 224))
-        
-        if USE_REAL_MODEL:
-            # Real ML prediction with proper preprocessing
-            # Convert image to numpy array and ensure 0-255 range
-            img_array = np.array(image, dtype=np.float32)
-            
-            # The model includes a Rescaling layer that divides by 255
-            # So we pass the raw image values (0-255)
-            img_array = np.expand_dims(img_array, axis=0)
-            
-            # Debug: check image statistics
-            print(f"Image shape: {img_array.shape}, Min: {img_array.min()}, Max: {img_array.max()}")
-            
-            prediction = model.predict(img_array, verbose=0)
-            print(f"Raw predictions: {prediction}")
-            
-            # Model outputs [critical_prob, healthy_prob] - LABELS WERE SWAPPED!
-            critical_prob = float(prediction[0][0])
-            healthy_prob = float(prediction[0][1])
-            
-            print(f"Critical: {critical_prob:.4f}, Healthy: {healthy_prob:.4f}")
-            
-            # Determine status based on probabilities
-            if critical_prob > 0.75:
-                status = "Critical"
-                recommendation = "Immediate replacement required. Tyre safety is compromised."
-                wear_percentage = int(critical_prob * 100)
-            elif critical_prob > 0.50:
-                status = "Warning"
-                recommendation = "Schedule replacement soon. Tread depth is below optimal level."
-                wear_percentage = int(critical_prob * 100)
-            else:
-                status = "Healthy"
-                recommendation = "Tyre is in excellent condition. Continue regular monitoring."
-                wear_percentage = int(critical_prob * 100)
-            
-            confidence = max(healthy_prob, critical_prob) * 100
-            
-        else:
-            # Mock prediction (fallback)
-            wear_percentage = random.randint(10, 90)
-            if wear_percentage >= 75:
-                status = "Critical"
-                recommendation = "Immediate replacement required."
-            elif wear_percentage >= 50:
-                status = "Warning"
-                recommendation = "Schedule replacement soon."
-            else:
-                status = "Healthy"
-                recommendation = "Tyre is in excellent condition."
-            confidence = random.uniform(75, 95)
-        
-        # Save prediction to database
-        prediction_record = {
-            "user_email": user_email,
-            "wear_percentage": wear_percentage,
-            "status": status,
-            "recommendation": recommendation,
-            "confidence": round(confidence, 2),
-            "analyzed_at": datetime.datetime.utcnow(),
-            "model_used": "CNN (TensorFlow)" if USE_REAL_MODEL else "Mock"
-        }
-        db.tire_predictions.insert_one(prediction_record)
-        
-        return jsonify({
-            "message": "Analysis completed successfully",
-            "wear_percentage": wear_percentage,
-            "status": status,
-            "recommendation": recommendation,
-            "confidence": round(confidence, 2),
-            "model_type": "Real ML Model" if USE_REAL_MODEL else "Mock Predictions",
-            "is_mock_prediction": not USE_REAL_MODEL
-        }), 200
-        
-    except Exception as e:
-        return jsonify({"error": f"Analysis failed: {str(e)}"}), 500
+    """
+    DEPRECATED: This endpoint has been removed.
+    Use POST /api/predict-demo (guest) or POST /api/predict-user (authenticated)
+    which include full tyre detection, explainability, PDF reports and email.
+    """
+    return jsonify({
+        "error": "This endpoint is deprecated and no longer available.",
+        "message": "Please use /api/predict-user (authenticated) or /api/predict-demo (guest trial)."
+    }), 410
 
 @app.route("/tire-history", methods=["GET"])
 @token_required

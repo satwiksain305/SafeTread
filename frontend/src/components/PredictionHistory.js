@@ -37,8 +37,8 @@ const PredictionHistory = ({ predictions = [] }) => {
   };
 
   const getSeverityColor = (wear) => {
-    if (wear < 33) return theme.colors.success;
-    if (wear < 66) return theme.colors.warning;
+    if (wear < 30) return theme.colors.success;
+    if (wear < 60) return theme.colors.warning;
     return theme.colors.danger;
   };
 
@@ -117,6 +117,7 @@ const PredictionHistory = ({ predictions = [] }) => {
       borderRadius: theme.borderRadius.md,
       transition: 'all 0.2s ease',
       animation: 'fadeIn 0.3s ease-out',
+      cursor: 'pointer',
     },
     itemSeverity: {
       width: '8px',
@@ -182,9 +183,17 @@ const PredictionHistory = ({ predictions = [] }) => {
             variant="secondary"
             size="sm"
             icon={<Download size={16} />}
-            onClick={handleExport}
+            onClick={() => {
+              const latest = history[0];
+              const reportId = latest?.predictionId || latest?.id;
+              if (reportId && reportId !== 'None' && reportId !== 'null') {
+                window.open(`http://localhost:5000/api/download-report/${reportId}`, '_blank');
+              } else {
+                alert('Report not available for this scan');
+              }
+            }}
           >
-            Export CSV
+            Download Report
           </Button>
         )}
       </div>
@@ -201,6 +210,13 @@ const PredictionHistory = ({ predictions = [] }) => {
           {history.map((item, index) => (
             <div
               key={index}
+              className="history-item"
+              onClick={() => {
+                const reportId = item.predictionId || item.id;
+                if (reportId && reportId !== 'None' && reportId !== 'null') {
+                  window.open(`http://localhost:5000/api/download-report/${reportId}`, '_blank');
+                }
+              }}
               style={{
                 ...styles.historyItem,
                 ...(index % 2 === 0 && { backgroundColor: theme.colors.lightBg }),
@@ -229,17 +245,30 @@ const PredictionHistory = ({ predictions = [] }) => {
                 </div>
                 <div style={styles.itemField}>
                   <div style={styles.itemLabel}>Status</div>
-                  <div style={{...styles.itemValue, display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                  <div style={{ ...styles.itemValue, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     {item.status}
                     {item.isMockPrediction && <span style={styles.mockBadge}>MOCK</span>}
                   </div>
                 </div>
               </div>
 
-              {/* Time */}
-              <div style={styles.itemTime}>
-                <Clock size={14} />
-                {formatTime(item.timestamp)}
+              {/* Time & Download */}
+              <div style={{ ...styles.itemTime, justifyContent: 'space-between', width: '100%' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Clock size={14} />
+                  {formatTime(item.timestamp)}
+                </div>
+                {item.predictionId && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<Download size={14} />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      window.open(`http://localhost:5000/api/download-report/${item.predictionId}`, '_blank');
+                    }}
+                  />
+                )}
               </div>
             </div>
           ))}
@@ -256,6 +285,12 @@ const PredictionHistory = ({ predictions = [] }) => {
             opacity: 1;
             transform: translateX(0);
           }
+        }
+        .history-item:hover {
+          transform: translateY(-2px);
+          box-shadow: ${theme.shadows.md};
+          background-color: ${theme.colors.cardBg} !important;
+          border-color: ${theme.colors.secondary};
         }
       `}</style>
     </div>
